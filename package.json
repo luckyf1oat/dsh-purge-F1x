@@ -35,7 +35,7 @@
     "@deepseek-ai/cordis": "^4.0.1"
   },
   "scripts": {
-    "test": "node test/selftest.mjs && node test/harness.mjs && node test/rewind.mjs && node test/adapter.mjs && node test/leaf.mjs && node test/retry.mjs && node test/fixhidden.mjs && node tools/lexicon-audit.mjs --strict && node tools/placeholders.mjs --strict",
+    "test": "node test/selftest.mjs && node test/harness.mjs && node test/rewind.mjs && node test/adapter.mjs && node test/leaf.mjs && node test/retry.mjs && node test/fixhidden.mjs && node test/mirror-backfill.mjs && node tools/lexicon-audit.mjs --strict && node tools/placeholders.mjs --strict",
     "test:all": "npm test && node test/smoke-cordis.mjs",
     "cost": "node bin/armor.mjs cost lib/kernel.js",
     "fix-hidden": "node bin/fix-hidden.mjs --verify",

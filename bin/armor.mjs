@@ -128,33 +128,68 @@ function eventToMd(event) {
 }
 
 function readEvents(file) {
-  const buf = fs.readFileSync(file);
-  const text = decodeMultiFrame(buf);
-  const events = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
+  // 与 verify 走同一条路径：逐帧解压、数组行摊平，大文件不会撞字符串上限。
+  return readEventsWithFrames(file).events;
+}
+
+/** 逐帧产出解压后的文本：峰值是一帧，不是整份历史。 */
+function* iterFrameText(buf) {
+  const offsets = [];
+  let i = 0;
+  while ((i = buf.indexOf(MAGIC, i)) !== -1) {
+    offsets.push(i);
+    i += 4;
+  }
+  if (offsets.length === 0) {
+    yield buf.toString("utf8");
+    return;
+  }
+  for (let k = 0; k < offsets.length; k += 1) {
+    const start = offsets[k];
+    const end = k + 1 < offsets.length ? offsets[k + 1] : buf.length;
+    if (end <= start) continue;
     try {
-      events.push(JSON.parse(line));
+      yield zlib.zstdDecompressSync(buf.subarray(start, end)).toString("utf8");
     } catch {
-      /* 坏行跳过 */
+      /* 半帧跳过 */
     }
   }
-  return events;
+}
+
+/** 一行可能是事件，也可能是一整个数组（旧补录写的），两种都摊开。 */
+function pushParsedEvent(out, line) {
+  if (!line || !line.trim()) return;
+  let value;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) if (item && typeof item === "object" && !Array.isArray(item)) out.push(item);
+  } else if (value && typeof value === "object") {
+    out.push(value);
+  }
 }
 
 function readEventsWithFrames(file) {
   const buf = fs.readFileSync(file);
-  const text = decodeMultiFrame(buf);
-  const events = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-      /* 坏行跳过 */
+  // 按 seq 去重、后写覆盖前写：旧补录把同一批事件写过几百遍（同一批在每帧里
+  // 重放），不去重的话一个 296 MB 的镜像能摊出六十万个对象，直接把堆撑爆。
+  const byKey = new Map();
+  // 一帧一帧解：整份解成一个字符串会撞 V8 单串上限（大镜像解压后 1.6 GB）。
+  for (const text of iterFrameText(buf)) {
+    for (const line of text.split("\n")) {
+      const batch = [];
+      pushParsedEvent(batch, line);
+      for (const e of batch) {
+        const seq = Number(e.seq);
+        const key = Number.isFinite(seq) ? `s${seq}` : `h${e.type || ""}|${e.time || ""}|${line.length}`;
+        byKey.set(key, e);
+      }
     }
   }
-  return { events, frames: countFrames(buf) };
+  return { events: [...byKey.values()], frames: countFrames(buf) };
 }
 
 function readShadowed(dir) {
@@ -227,16 +262,32 @@ function listSessions(root) {
   } catch {
     return sessions;
   }
+  // 先用镜像自己记的 index.json：`list` 不该把每个会话的整份 zstd 解一遍。
+  // 索引里没有的（旧目录、索引被裁掉）才回退去数帧。
+  let index = {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(root, "index.json"), "utf8"));
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) index = raw;
+  } catch {
+    index = {};
+  }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(root, entry.name);
-    let events = 0;
-    try {
-      events = readEvents(path.join(dir, "events.jsonl.zstd")).length;
-    } catch {
-      events = 0;
+    let events = Number(index[entry.name]?.events);
+    if (!Number.isFinite(events)) {
+      try {
+        events = readEvents(path.join(dir, "events.jsonl.zstd")).length;
+      } catch {
+        events = 0;
+      }
     }
-    const shadows = readShadowed(dir).size;
+    let shadows = 0;
+    try {
+      shadows = fs.readdirSync(dir).filter((f) => /^shadowed-\d+\.md$/.test(f)).length;
+    } catch {
+      shadows = 0;
+    }
     sessions.push({ id: entry.name, events, shadows, bytes: directoryBytes(dir) });
   }
   sessions.sort((a, b) => b.events - a.events || a.id.localeCompare(b.id));
