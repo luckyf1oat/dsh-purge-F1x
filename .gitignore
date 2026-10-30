@@ -1,0 +1,31 @@
+# 依赖
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# 运行时产物
+*.log
+.purge-flash/
+purge-flash-raw/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 本地临时
+.tasks/
+.tmp/
+
+# Office 锁文件
+~$*
+
+# dsh-purge 打补丁留下的备份
+*.dshpurge.bak
+*.dshpurge-prev

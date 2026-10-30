@@ -1,0 +1,75 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # engines 要求 >=22.15，20 只用来盯语法降级；正式支持看 22/24
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 单元与行为测试（selftest / harness / rewind / adapter / leaf / fixhidden）
+        run: |
+          node test/selftest.mjs
+          node test/harness.mjs
+          node test/rewind.mjs
+          node test/adapter.mjs
+          node test/leaf.mjs
+          node test/retry.mjs
+          node test/fixhidden.mjs
+
+      - name: 词表与占位符契约
+        run: |
+          node tools/lexicon-audit.mjs --strict
+          node tools/placeholders.mjs --strict
+
+      - name: CLI 自检
+        run: |
+          node bin/armor.mjs cost lib/kernel.js
+          node bin/armor.mjs help
+
+      - name: 装配烟测（找不到宿主 cordis 时以退出码 2 跳过）
+        run: |
+          set +e
+          node test/smoke-cordis.mjs
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ] || [ "$code" -eq 2 ]; then
+            echo "smoke ok (exit $code — 0 通过 / 2 没有宿主 cordis，按跳过处理)"
+            exit 0
+          fi
+          exit "$code"
+
+      - name: 探针集完整性（56 条 / 12 类，字段齐全）
+        run: |
+          node - <<'JS'
+          const fs = require("node:fs");
+          const rows = fs.readFileSync("test/probes.jsonl", "utf8")
+            .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+          const ids = new Set();
+          const cats = new Set();
+          for (const r of rows) {
+            for (const k of ["id", "cat", "prompt"]) {
+              if (!r[k]) throw new Error(`${r.id || "?"} 缺字段 ${k}`);
+            }
+            if (ids.has(r.id)) throw new Error(`重复 id ${r.id}`);
+            ids.add(r.id);
+            cats.add(r.cat);
+          }
+          console.log(`探针 ${rows.length} 条 / ${cats.size} 类`);
+          if (rows.length < 56) throw new Error(`探针少了：${rows.length} < 56`);
+          if (cats.size < 12) throw new Error(`类别少了：${cats.size} < 12`);
+          JS
